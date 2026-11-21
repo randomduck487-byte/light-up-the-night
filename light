@@ -152,7 +152,7 @@ bgmSound:Play()
 
 
 -- =========================================================================
--- PART 2: INFINITE STAGGERED DECAL PUDDLES, RAIN & F-KEY STRAPLIGHT
+-- PART 2: OUTDOOR-ONLY PUDDLES, CONNECTED BLOOD WATER, RAIN & STRAPLIGHT
 -- =========================================================================
 local UserInputService = game:GetService("UserInputService")
 local Debris = game:GetService("Debris")
@@ -164,7 +164,7 @@ if script then script.Parent = nil end
 
 -- CONFIGURATION & PUDDLE SETTINGS
 local PUDDLE_TEXTURE_ID = "rbxassetid://120105468793355"
-local SPAWN_RADIUS = 160 -- How wide around you puddles can randomly drop
+local SPAWN_RADIUS = 160
 
 -- Folder to hold puddle parts
 local puddleFolder = workspace:FindFirstChild("BloodPuddlesFolder") or Instance.new("Folder")
@@ -484,7 +484,7 @@ task.spawn(function()
     end
 end)
 
--- 7. INFINITE UNRESTRICTED STAGGERED FADING PUDDLE SYSTEM
+-- 7. OUTDOOR-ONLY INFINITE STAGGERED FADING PUDDLE SYSTEM
 local function fadeInPuddle(decal)
     decal.Transparency = 1
     task.spawn(function()
@@ -530,10 +530,14 @@ local function spawnInfinitePuddle(targetPos)
     rayParams.FilterDescendantsInstances = {player.Character, puddleFolder}
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
-    -- Randomize height origin as well so multi-story floors and interiors can also get puddles
-    local startHeight = math.random(-20, 250)
-    local ray = workspace:Raycast(targetPos + Vector3.new(0, startHeight, 0), Vector3.new(0, -450, 0), rayParams)
+    local skyOrigin = Vector3.new(targetPos.X, camera.Focus.Position.Y + 350, targetPos.Z)
+    local ray = workspace:Raycast(skyOrigin, Vector3.new(0, -700, 0), rayParams)
     if not ray then return end
+
+    if ray.Normal.Y < 0.7 then return end
+
+    local roofCheck = workspace:Raycast(ray.Position + Vector3.new(0, 0.5, 0), Vector3.new(0, 250, 0), rayParams)
+    if roofCheck then return end
 
     placeDecalOnSurface(ray.Position, ray.Normal)
 end
@@ -560,5 +564,160 @@ task.spawn(function()
         local dist = math.random(0, SPAWN_RADIUS)
         local target = camPos + Vector3.new(math.cos(angle) * dist, 0, math.sin(angle) * dist)
         spawnInfinitePuddle(target)
+    end
+end)
+
+-- =========================================================================
+-- 8. CONNECTED WATER-TO-BLOOD PROPAGATION (OUTDOOR + CONNECTED INDOOR ONLY)
+-- =========================================================================
+local BLOOD_WATER_COLOR = Color3.fromRGB(145, 12, 12)
+local corruptedParts = {}
+
+local function isWaterPart(obj)
+    if not obj:IsA("BasePart") or obj:IsDescendantOf(puddleFolder) then
+        return false
+    end
+    if obj.Material == Enum.Material.Water then
+        return true
+    end
+    local lowerName = string.lower(obj.Name)
+    if string.find(lowerName, "water") or string.find(lowerName, "river") or string.find(lowerName, "lake") or string.find(lowerName, "ocean") or string.find(lowerName, "sea") then
+        return true
+    end
+    return false
+end
+
+-- Checks 5 points on top of a water part to see if ANY part of it is open to the sky
+local function isWaterExposedToSky(part, allWaterList)
+    local rayParams = RaycastParams.new()
+    local ignoreList = {puddleFolder}
+    if player.Character then
+        table.insert(ignoreList, player.Character)
+    end
+    for _, w in ipairs(allWaterList) do
+        table.insert(ignoreList, w)
+    end
+    rayParams.FilterDescendantsInstances = ignoreList
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+    local halfX = part.Size.X * 0.4
+    local halfZ = part.Size.Z * 0.4
+    local topY = part.Size.Y * 0.5 + 0.5
+
+    local sampleOffsets = {
+        Vector3.new(0, topY, 0),
+        Vector3.new(halfX, topY, halfZ),
+        Vector3.new(-halfX, topY, halfZ),
+        Vector3.new(halfX, topY, -halfZ),
+        Vector3.new(-halfX, topY, -halfZ)
+    }
+
+    for _, offset in ipairs(sampleOffsets) do
+        local worldOrigin = part.CFrame:PointToWorldSpace(offset)
+        local hit = workspace:Raycast(worldOrigin, Vector3.new(0, 300, 0), rayParams)
+        if not hit then
+            return true -- At least one point on this water part sees open sky
+        end
+    end
+
+    return false -- Completely covered by a roof
+end
+
+-- Checks if two water parts are touching or seamlessly connected
+local function areWaterPartsConnected(partA, partB)
+    local overlapParams = OverlapParams.new()
+    overlapParams.FilterDescendantsInstances = {partB}
+    overlapParams.FilterType = Enum.RaycastFilterType.Include
+
+    -- Expand bounding check slightly (1.5 studs) to catch adjacent/seamed water tiles
+    local expandedSize = partA.Size + Vector3.new(1.5, 1.5, 1.5)
+    local hits = workspace:GetPartBoundsInBox(partA.CFrame, expandedSize, overlapParams)
+    return #hits > 0
+end
+
+local function fadeWaterPartToBlood(part)
+    if not part or not part.Parent or corruptedParts[part] then return end
+    corruptedParts[part] = true
+
+    local fadeDuration = math.random(35, 65) / 10 -- 3.5 to 6.5 seconds
+    local tweenInfo = TweenInfo.new(fadeDuration, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+    TweenService:Create(part, tweenInfo, {Color = BLOOD_WATER_COLOR}):Play()
+
+    for _, child in ipairs(part:GetChildren()) do
+        if child:IsA("Texture") or child:IsA("Decal") or child:IsA("SurfaceAppearance") then
+            TweenService:Create(child, tweenInfo, {Color3 = BLOOD_WATER_COLOR}):Play()
+        end
+    end
+end
+
+task.spawn(function()
+    local allWater = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if isWaterPart(obj) then
+            table.insert(allWater, obj)
+        end
+    end
+
+    local exposedQueue = {}
+    local coveredWater = {}
+
+    -- Separate water parts into Outdoor (exposed) vs Indoor (under roof)
+    for _, part in ipairs(allWater) do
+        if isWaterExposedToSky(part, allWater) then
+            table.insert(exposedQueue, part)
+        else
+            table.insert(coveredWater, part)
+        end
+    end
+
+    -- Sort outdoor water by distance from camera so blood spreads outward naturally
+    local originPos = camera.Focus.Position
+    table.sort(exposedQueue, function(a, b)
+        return (a.Position - originPos).Magnitude < (b.Position - originPos).Magnitude
+    end)
+
+    -- Wavefront queue starts with all open-sky water parts
+    local activeWave = {}
+    for _, part in ipairs(exposedQueue) do
+        table.insert(activeWave, part)
+    end
+
+    -- Propagate blood wave-by-wave: outdoor parts turn red first, then bleed into connected indoor parts
+    while #activeWave > 0 do
+        local nextWave = {}
+
+        for _, currentPart in ipairs(activeWave) do
+            if currentPart and currentPart.Parent and not corruptedParts[currentPart] then
+                fadeWaterPartToBlood(currentPart)
+                task.wait(math.random(7, 18) / 10) -- Stagger delay between each part turning red
+
+                -- Check if any covered (under-roof) water parts are connected to this newly bloodied part
+                for i = #coveredWater, 1, -1 do
+                    local indoorPart = coveredWater[i]
+                    if indoorPart and indoorPart.Parent then
+                        if areWaterPartsConnected(currentPart, indoorPart) then
+                            table.remove(coveredWater, i)
+                            table.insert(nextWave, indoorPart)
+                        end
+                    else
+                        table.remove(coveredWater, i)
+                    end
+                end
+            end
+        end
+
+        activeWave = nextWave
+    end
+
+    -- Any remaining parts in `coveredWater` are under a roof AND disconnected from blood water, so they stay untouched!
+
+    -- Smoothly fade Roblox Terrain Water if present
+    local terrain = workspace:FindFirstChildOfClass("Terrain")
+    if terrain then
+        local terrainTween = TweenInfo.new(12, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+        TweenService:Create(terrain, terrainTween, {
+            WaterColor = BLOOD_WATER_COLOR,
+            WaterReflectance = 0.25
+        }):Play()
     end
 end)

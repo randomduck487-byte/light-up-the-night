@@ -142,20 +142,19 @@ for _, oldSound in ipairs(SoundService:GetChildren()) do
 	end
 end
 
-local sound = Instance.new("Sound")
-sound.Name = "ULTRAKILL_7_2_BGM"
-sound.SoundId = bgMusic
-sound.Looped = true
-sound.Volume = 0.6
-sound.Parent = SoundService
-sound:Play()
+local bgmSound = Instance.new("Sound")
+bgmSound.Name = "ULTRAKILL_7_2_BGM"
+bgmSound.SoundId = bgMusic
+bgmSound.Looped = true
+bgmSound.Volume = 0.6
+bgmSound.Parent = SoundService
+bgmSound:Play()
 
 
 -- =========================================================================
--- PART 2: YOUR STAGGERED FADING DECAL PUDDLES, RAIN & F-KEY STRAPLIGHT
+-- PART 2: INFINITE STAGGERED DECAL PUDDLES, RAIN & F-KEY STRAPLIGHT
 -- =========================================================================
 local UserInputService = game:GetService("UserInputService")
-local Players = game:GetService("Players")
 local Debris = game:GetService("Debris")
 
 local player = Players.LocalPlayer
@@ -165,10 +164,7 @@ if script then script.Parent = nil end
 
 -- CONFIGURATION & PUDDLE SETTINGS
 local PUDDLE_TEXTURE_ID = "rbxassetid://120105468793355"
-local MAX_PUDDLES = 60
-local MIN_PUDDLE_DIST = 6
-local MAX_PLAYER_DIST = 100
-local activePuddles = {}
+local SPAWN_RADIUS = 160 -- How wide around you puddles can randomly drop
 
 -- Folder to hold puddle parts
 local puddleFolder = workspace:FindFirstChild("BloodPuddlesFolder") or Instance.new("Folder")
@@ -344,7 +340,7 @@ end
 
 resetLighting()
 
--- 3. DUAL-LOOP SMART AUDIO
+-- 3. DUAL-LOOP SMART AUDIO + ROOF AMBIENCE MUFFLER
 local outdoorRain = Instance.new("Sound")
 outdoorRain.SoundId = outdoorUrl
 outdoorRain.Looped = true
@@ -359,6 +355,9 @@ indoorRain.Volume = 0
 indoorRain.Parent = SoundService
 indoorRain:Play()
 
+local BGM_OUTDOOR_VOL = 0.6
+local BGM_INDOOR_VOL = 0.15
+
 task.spawn(function()
     while true do
         task.wait(0.3)
@@ -369,9 +368,11 @@ task.spawn(function()
         if hit then
             outdoorRain.Volume = math.max(0, outdoorRain.Volume - 0.05)
             indoorRain.Volume = math.min(0.5, indoorRain.Volume + 0.05)
+            bgmSound.Volume = math.max(BGM_INDOOR_VOL, bgmSound.Volume - 0.05)
         else
             outdoorRain.Volume = math.min(0.5, outdoorRain.Volume + 0.05)
             indoorRain.Volume = math.max(0, indoorRain.Volume - 0.05)
+            bgmSound.Volume = math.min(BGM_OUTDOOR_VOL, bgmSound.Volume + 0.05)
         end
     end
 end)
@@ -483,7 +484,7 @@ task.spawn(function()
     end
 end)
 
--- 7. STAGGERED FADING PUDDLE SYSTEM
+-- 7. INFINITE UNRESTRICTED STAGGERED FADING PUDDLE SYSTEM
 local function fadeInPuddle(decal)
     decal.Transparency = 1
     task.spawn(function()
@@ -498,7 +499,7 @@ local function fadeInPuddle(decal)
 end
 
 local function placeDecalOnSurface(hitPos, normal)
-    local puddleSize = math.random(5, 11)
+    local puddleSize = math.random(5, 12)
 
     local anchor = Instance.new("Part")
     anchor.Size = Vector3.new(puddleSize, 0.02, puddleSize)
@@ -521,59 +522,43 @@ local function placeDecalOnSurface(hitPos, normal)
     end
 
     anchor.CFrame = CFrame.new(hitPos + (normal * 0.02)) * CFrame.Angles(0, math.rad(math.random(0, 360)), 0)
-    
     fadeInPuddle(decal)
-    return {anchor = anchor, decal = decal, pos = hitPos}
 end
 
-local function spawnOrRecyclePuddle(targetPos)
-    local camPos = camera.Focus.Position
-
+local function spawnInfinitePuddle(targetPos)
     local rayParams = RaycastParams.new()
     rayParams.FilterDescendantsInstances = {player.Character, puddleFolder}
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
-    local ray = workspace:Raycast(targetPos + Vector3.new(0, 150, 0), Vector3.new(0, -300, 0), rayParams)
+    -- Randomize height origin as well so multi-story floors and interiors can also get puddles
+    local startHeight = math.random(-20, 250)
+    local ray = workspace:Raycast(targetPos + Vector3.new(0, startHeight, 0), Vector3.new(0, -450, 0), rayParams)
     if not ray then return end
 
-    for _, item in ipairs(activePuddles) do
-        if (item.pos - camPos).Magnitude > MAX_PLAYER_DIST then
-            item.anchor:Destroy()
-            local newItem = placeDecalOnSurface(ray.Position, ray.Normal)
-            item.anchor = newItem.anchor
-            item.decal = newItem.decal
-            item.pos = ray.Position
-            return
-        end
-    end
-
-    if #activePuddles < MAX_PUDDLES then
-        local newItem = placeDecalOnSurface(ray.Position, ray.Normal)
-        table.insert(activePuddles, newItem)
-    end
+    placeDecalOnSurface(ray.Position, ray.Normal)
 end
 
--- Staggered Startup Spawn
+-- Staggered Startup Burst
 task.spawn(function()
     task.wait(0.5)
-    for i = 1, 35 do
+    for i = 1, 45 do
         local angle = math.random() * math.pi * 2
-        local dist = math.random(MIN_PUDDLE_DIST, 75)
+        local dist = math.random(0, SPAWN_RADIUS)
         local camPos = camera.Focus.Position
         local target = camPos + Vector3.new(math.cos(angle) * dist, 0, math.sin(angle) * dist)
-        spawnOrRecyclePuddle(target)
-        task.wait(math.random(80, 180) / 1000)
+        spawnInfinitePuddle(target)
+        task.wait(math.random(50, 120) / 1000)
     end
 end)
 
--- Continuous Spawner Loop around Player
+-- Continuous Infinite Spawner Loop
 task.spawn(function()
     while true do
-        task.wait(0.2)
+        task.wait(0.15)
         local camPos = camera.Focus.Position
         local angle = math.random() * math.pi * 2
-        local dist = math.random(MIN_PUDDLE_DIST, 90)
+        local dist = math.random(0, SPAWN_RADIUS)
         local target = camPos + Vector3.new(math.cos(angle) * dist, 0, math.sin(angle) * dist)
-        spawnOrRecyclePuddle(target)
+        spawnInfinitePuddle(target)
     end
 end)
